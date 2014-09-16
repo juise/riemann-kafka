@@ -10,6 +10,7 @@
             [clj-kafka.producer    :refer [send-message producer]]
             [riemann.service       :refer [Service ServiceEquiv]]
             [riemann.config        :refer [service!]]
+            [riemann.transport.graphite :refer [decode-graphite-line]]
             [clojure.tools.logging :refer [info error]]))
 
 (defn safe-decode
@@ -17,7 +18,8 @@
   [input]
   (try
     (let [{:keys [value]} (to-clojure input)]
-      (decode-msg (Proto$Msg/parseFrom value)))
+      (info "Received raw message: " (String. value))
+       (decode-graphite-line (String. value)))
     (catch Exception e
       (error e "could not decode protobuf msg"))))
 
