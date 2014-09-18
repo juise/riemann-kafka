@@ -4,7 +4,7 @@
            kafka.consumer.KafkaStream
            kafka.producer.KeyedMessage)
   (:require [riemann.core          :refer [stream!]]
-            [riemann.common        :refer [decode-msg encode]]
+            [riemann.common        :refer [encode]]
             [clj-kafka.core        :refer [to-clojure]]
             [clj-kafka.consumer.zk :refer [consumer]]
             [clj-kafka.producer    :refer [send-message producer]]
@@ -18,7 +18,7 @@
   [input]
   (try
     (let [{:keys [value]} (to-clojure input)]
-      (info "Received raw message: " (String. value))
+       (info "Received raw message: " (decode-graphite-line (String. value)))
        (decode-graphite-line (String. value)))
     (catch Exception e
       (error e "could not decode protobuf msg"))))
@@ -42,7 +42,7 @@
               [stream & _] (get stream-map topic)
               msg-seq      (iterator-seq (.iterator ^KafkaStream stream))]
           (doseq [msg msg-seq :while @running? :when @core]
-            (doseq [event (:events (safe-decode msg))]
+            (let [event (safe-decode msg)]
               (info "got input event: " event)
               (stream! @core event))
             (.commitOffsets inq))
