@@ -18,7 +18,6 @@
   [input]
   (try
     (let [{:keys [value]} (to-clojure input)]
-       (info "Received raw message: " (decode-graphite-line (String. value)))
        (decode-graphite-line (String. value)))
     (catch Exception e
       (error e "could not decode protobuf msg"))))
@@ -43,7 +42,6 @@
               msg-seq      (iterator-seq (.iterator ^KafkaStream stream))]
           (doseq [msg msg-seq :while @running? :when @core]
             (let [event (safe-decode msg)]
-              (info "got input event: " event)
               (stream! @core event))
             (.commitOffsets inq))
           (info "was instructed to stop, BYE!"))
