@@ -1,4 +1,4 @@
 {:plugin "kafka"
- :title  "A plugin for consuming & producing events to and from kafka queues"
- :git-repo "https://github.com/pyr/riemann-kafka"
+ :title "A riemann plugin to consume from and produce to a kafka queue"
+ :git-repo "https://github.com/juise/riemann-kafka"
  :require riemann.plugin.kafka}

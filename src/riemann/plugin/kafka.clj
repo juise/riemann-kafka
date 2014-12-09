@@ -1,16 +1,13 @@
 (ns riemann.plugin.kafka
-  "A riemann plugin to consume and produce from and to a kafka queue"
-  (:import com.aphyr.riemann.Proto$Msg
-           kafka.consumer.KafkaStream
-           kafka.producer.KeyedMessage)
+  "A riemann plugin to consume from and produce to a kafka queue"
+  (:import com.aphyr.riemann.Proto$Msg)
   (:require [riemann.core          :refer [stream!]]
-            [riemann.common        :refer [encode]]
-            [clj-kafka.core        :refer [to-clojure]]
-            [clj-kafka.consumer.zk :refer [consumer]]
-            [clj-kafka.producer    :refer [send-message producer]]
-            [riemann.service       :refer [Service ServiceEquiv]]
+            [riemann.common        :refer [encode decode-msg]]
             [riemann.config        :refer [service!]]
-            [riemann.transport.graphite :refer [decode-graphite-line]]
+            [riemann.service       :refer [Service ServiceEquiv]]
+            [clj-kafka.core        :refer [to-clojure with-resource]]
+            [clj-kafka.producer    :refer [producer message send-messages]]
+            [clj-kafka.consumer.zk :refer [consumer messages shutdown]]
             [clojure.tools.logging :refer [info error]]))
 
 (defn safe-decode
@@ -18,73 +15,64 @@
   [input]
   (try
     (let [{:keys [value]} (to-clojure input)]
-       (decode-graphite-line (String. value)))
+       (decode-msg (Proto$Msg/parseFrom value)))
     (catch Exception e
       (error e "could not decode protobuf msg"))))
 
 (defn stringify
   "Prepare a map to be converted to properties"
-  [props]
-  (let [input (dissoc props :topic)
-        skeys (map (juxt (comp name key) val) input)]
-    (reduce merge {} skeys)))
+  [config]
+    (let [config (dissoc config :topic)]
+      (zipmap (map name (keys config)) (vals config))))
 
 (defn start-kafka-thread
-  "Start a kafka thread which will pop messages off of the queue as long
-   as running? is true"
+  "Start a kafka thread which will pop messages off of the queue as long as running? is true"
   [running? core {:keys [topic] :as config}]
-  (let [inq (consumer (stringify config))]
+  (let [c (consumer (stringify config))]
     (future
-      (info "in consumption thread with consumer: " inq)
-      (try
-        (let [stream-map   (.createMessageStreams inq {topic (int 1)})
-              [stream & _] (get stream-map topic)
-              msg-seq      (iterator-seq (.iterator ^KafkaStream stream))]
-          (doseq [msg msg-seq :while @running? :when @core]
-            (let [event (safe-decode msg)]
-              (stream! @core event))
-            (.commitOffsets inq))
-          (info "was instructed to stop, BYE!"))
-        (catch Exception e
-          (error e "interrupted consumption"))
-        (finally
-          (.shutdown inq))))))
+      (with-resource [c (consumer (stringify config))]
+        shutdown
+        (doseq [message (messages c topic) :while @running? :when @core]
+          (let [event (safe-decode message)]
+            (stream! @core event)))))))
 
 (defn kafka-consumer
-  "Yield a kafka consumption service"
+  "Starts a new kafka consumer"
   [config]
   (service!
-   (let [running? (atom true)
-         core     (atom nil)]
-     (reify
-       clojure.lang.ILookup
-       (valAt [this k not-found]
-         (or (.valAt this k) not-found))
-       (valAt [this k]
-         (info "looking up: " k)
-         (if (= (name k) "config") config))
-       ServiceEquiv
-       (equiv? [this other]
-         (= config (:config other)))
-       Service
-       (conflict? [this other]
-         (= config (:config other)))
-       (start! [this]
-         (info "starting kafka consumer running for topics: "
-               (:topic config))
-         (start-kafka-thread running? core
-                             (merge {:topic "riemann"} config)))
-       (reload! [this new-core]
-         (info "reload called, setting new core value")
-         (reset! core new-core))
-       (stop! [this]
-         (reset! running? false)
-         (info "kafka consumer stopping"))))))
+    (let [core     (atom nil)
+          running? (atom true)]
+      (reify
+        clojure.lang.ILookup
+        (valAt [this k not-found]
+          (or (.valAt this k) not-found))
+        (valAt [this k]
+          (info "looking up: " k)
+          (if (= (name k) "config") config))
+
+        ServiceEquiv
+        (equiv? [this other]
+          (= config (:config other)))
+
+        Service
+        (conflict? [this other]
+          (= config (:config other)))
+
+        (reload! [this new-core]
+          (reset! core new-core))
+
+        (start! [this]
+          (info "Kafka consumer for topics" (:topic config) "online")
+          (start-kafka-thread running? core config))
+
+        (stop! [this]
+          (reset! running? false))))))
 
 (defn kafka-producer
-  "Yield a kafka producer"
+  "Starts a new kafka producer"
   [{:keys [topic] :as config}]
   (let [p (producer (stringify config))]
     (fn [event]
-      (let [events (if (sequential? event) event [event])]
-        (send-message p (KeyedMessage. topic (encode events)))))))
+      (let [events (if (sequential? event) event [event])
+            messages (map #(message topic (encode %)) events)]
+        (send-messages p messages)))))
