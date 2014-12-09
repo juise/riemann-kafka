@@ -1,6 +1,5 @@
 (ns riemann.plugin.kafka
   "A riemann plugin to consume from and produce to a kafka queue"
-  (:import com.aphyr.riemann.Proto$Msg)
   (:require [riemann.core          :refer [stream!]]
             [riemann.common        :refer [encode decode-msg]]
             [riemann.config        :refer [service!]]
@@ -12,10 +11,9 @@
 
 (defn safe-decode
   "Do not let a bad payload break our consumption"
-  [input]
+  [fn message]
   (try
-    (let [{:keys [value]} (to-clojure input)]
-       (decode-msg (Proto$Msg/parseFrom value)))
+    (fn (:value message))
     (catch Exception e
       (error e "could not decode protobuf msg"))))
 
@@ -27,18 +25,18 @@
 
 (defn start-kafka-thread
   "Start a kafka thread which will pop messages off of the queue as long as running? is true"
-  [running? core {:keys [topic] :as config}]
+  [running? core {:keys [topic] :as config} fn]
   (let [c (consumer (stringify config))]
     (future
       (with-resource [c (consumer (stringify config))]
         shutdown
         (doseq [message (messages c topic) :while @running? :when @core]
-          (let [event (safe-decode message)]
+          (let [event (safe-decode fn message)]
             (stream! @core event)))))))
 
 (defn kafka-consumer
   "Starts a new kafka consumer"
-  [config]
+  [config fn]
   (service!
     (let [core     (atom nil)
           running? (atom true)]
@@ -63,7 +61,7 @@
 
         (start! [this]
           (info "Kafka consumer for topics" (:topic config) "online")
-          (start-kafka-thread running? core config))
+          (start-kafka-thread running? core config fn))
 
         (stop! [this]
           (reset! running? false))))))
@@ -76,3 +74,4 @@
       (let [events (if (sequential? event) event [event])
             messages (map #(message topic (encode %)) events)]
         (send-messages p messages)))))
+
